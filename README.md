@@ -126,6 +126,8 @@ docs/               contracts.md (the interfaces) and README media (with their s
   transcript text goes to TypeSafe.
 - Annie says she is an AI in her first reply, keeps things suitable for general audiences, and
   points to 988 if someone mentions self-harm ([`persona/character.md`](persona/character.md)).
+- An optional, off-by-default Rosemate toy integration lets Annie react to toy triggers. When configured, it adds
+  Rosemate as a third service; see [`docs/rosemate.md`](docs/rosemate.md).
 - Both voices in the demo video are AI-generated. The session itself is not edited: it is replayed
   frame by frame from the recording.
 

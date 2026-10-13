@@ -9,7 +9,9 @@ Deploy (from the repo root, with fal >= 1.79 installed and `fal auth login` done
     curl https://fal.run/<your-username>/annie-broker/health
 
 Routes then live at https://fal.run/<owner>/annie-broker/{session,decide,status,health}
-and wss://fal.run/<owner>/annie-broker/decide. `--auth public` is required because
+and wss://fal.run/<owner>/annie-broker/decide. The optional Rosemate integration
+(docs/rosemate.md) adds POST /rosemate/{session,consent,action,close} and WS
+/rosemate/events when its ANNIE_ROSEMATE_* secrets are set (unverified on fal). `--auth public` is required because
 browsers call the broker without a fal key; the broker's own budget, per-IP limit,
 origin allowlist and HMAC tokens are the access control.
 
