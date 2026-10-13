@@ -26,6 +26,7 @@ from .budget import Budget, Rejected
 from .config import VERSION, Settings
 from .decide import DecideClient, DecideInvalid, DecideUnavailable
 from .reaper import Reaper
+from .rosemate import Rosemate
 from .voice import VoiceClient, VoiceError
 
 log = logging.getLogger("annie")
@@ -67,6 +68,7 @@ class Broker:
         openai_transport: Optional[httpx.AsyncBaseTransport] = None,
         typesafe_transport: Optional[httpx.AsyncBaseTransport] = None,
         sideband_connect: Optional[Callable] = None,
+        rosemate_transport: Optional[httpx.AsyncBaseTransport] = None,
         clock: Callable[[], float] = time.time,
     ):
         self.s = settings or Settings.from_env()
@@ -75,6 +77,7 @@ class Broker:
         self.voice = VoiceClient(self.s, openai_transport)
         self.decider = DecideClient(self.s, typesafe_transport)
         self.reaper = Reaper(self.s, self.budget, self.voice, sideband_connect, clock)
+        self.rosemate = Rosemate(self.s, rosemate_transport, clock)
         self.origin_regex = origin_matcher(self.s.allowed_origins)
         self._origin_re = re.compile(self.origin_regex) if self.origin_regex else None
 
@@ -85,6 +88,7 @@ class Broker:
         await self.reaper.aclose()
         await self.voice.aclose()
         await self.decider.aclose()
+        await self.rosemate.aclose()
 
     # -- request context -----------------------------------------------------
 
@@ -235,6 +239,19 @@ class Broker:
                 task.cancel()
 
 
+    # -- optional Rosemate integration (docs/rosemate.md) -------------------------
+
+    async def rosemate_raw(self, route: str, raw: bytes, ip: str, origin: Optional[str]) -> tuple[int, dict]:
+        # The origin check is a browser guard only; every route but /session needs the
+        # scoped integration token, and /session needs the operator's access key.
+        if not self.origin_allowed(origin):
+            return 403, _err("origin_not_allowed")
+        return await self.rosemate.handle(route, raw, ip)
+
+    async def rosemate_socket(self, ws: WebSocket) -> None:
+        await self.rosemate.events_socket(ws, self.origin_allowed(ws.headers.get("origin")))
+
+
 async def read_limited(request: Request, limit: int = MAX_BODY_BYTES) -> Optional[bytes]:
     """Read the body, giving up (None) past `limit` bytes instead of buffering it all."""
     chunks, size = [], 0
@@ -301,5 +318,17 @@ def create_app(settings: Optional[Settings] = None, broker: Optional[Broker] = N
     @app.websocket("/decide")
     async def decide_ws(websocket: WebSocket) -> None:
         await broker.decide_socket(websocket)
+
+    @app.post("/rosemate/{route}")
+    async def rosemate(route: str, request: Request) -> JSONResponse:
+        raw = await read_limited(request)
+        if raw is None:
+            return respond((413, _err("too_large")))
+        ip = broker.client_ip(request.headers, request.client.host if request.client else None)
+        return respond(await broker.rosemate_raw(route, raw, ip, request.headers.get("origin")))
+
+    @app.websocket("/rosemate/events")
+    async def rosemate_events(websocket: WebSocket) -> None:
+        await broker.rosemate_socket(websocket)
 
     return app

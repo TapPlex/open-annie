@@ -71,6 +71,21 @@ class Settings:
     # Dev only: GET /dev-token hands out /decide tokens without a voice session.
     dev: bool = False
     dev_token_ttl_s: int = 900
+    # Optional Rosemate MCP integration (docs/rosemate.md). Off unless the URL, the token
+    # and an operator access key are all set. The token never leaves the server.
+    rosemate_mcp_url: str | None = None
+    rosemate_mcp_token: str | None = field(default=None, repr=False)
+    rosemate_access_key: str | None = field(default=None, repr=False)
+    rosemate_events_url: str | None = None  # default: derived from the MCP URL
+    rosemate_toy_actions: bool = False  # outbound hardware calls; users must also consent
+    rosemate_poll: bool = False  # consuming mailbox fallback; competes with the Rosemate PWA
+    rosemate_session_ttl_s: int = 1800
+    rosemate_max_sessions: int = 4
+    rosemate_timeout_s: float = 8.0
+    rosemate_max_intensity: int = 60
+    rosemate_max_duration_s: float = 10.0
+    rosemate_toy_per_min: int = 12
+    rosemate_event_max_age_s: float = 30.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -104,6 +119,19 @@ class Settings:
             typesafe_base_url=_env("TYPESAFE_BASE_URL", "https://api.typesafe.ai"),
             dev=_bool("ANNIE_DEV", False),
             dev_token_ttl_s=_int("ANNIE_DEV_TOKEN_TTL_S", 900),
+            rosemate_mcp_url=_env("ANNIE_ROSEMATE_MCP_URL"),
+            rosemate_mcp_token=_env("ANNIE_ROSEMATE_MCP_TOKEN"),
+            rosemate_access_key=_env("ANNIE_ROSEMATE_ACCESS_KEY"),
+            rosemate_events_url=_env("ANNIE_ROSEMATE_EVENTS_URL"),
+            rosemate_toy_actions=_bool("ANNIE_ROSEMATE_TOY_ACTIONS", False),
+            rosemate_poll=_bool("ANNIE_ROSEMATE_POLL", False),
+            rosemate_session_ttl_s=_int("ANNIE_ROSEMATE_SESSION_TTL_S", 1800),
+            rosemate_max_sessions=_int("ANNIE_ROSEMATE_MAX_SESSIONS", 4),
+            rosemate_timeout_s=_float("ANNIE_ROSEMATE_TIMEOUT_S", 8.0),
+            rosemate_max_intensity=_int("ANNIE_ROSEMATE_MAX_INTENSITY", 60),
+            rosemate_max_duration_s=_float("ANNIE_ROSEMATE_MAX_DURATION_S", 10.0),
+            rosemate_toy_per_min=_int("ANNIE_ROSEMATE_TOY_PER_MIN", 12),
+            rosemate_event_max_age_s=_float("ANNIE_ROSEMATE_EVENT_MAX_AGE_S", 30.0),
         )
 
     @property

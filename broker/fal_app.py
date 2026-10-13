@@ -53,7 +53,12 @@ class AnnieBroker(fal.App, name="annie-broker", keep_alive=300):
     max_concurrency = 1
     max_multiplexing = 32  # WS /decide holds a slot for a whole voice session
     request_timeout = 300  # longer than ANNIE_SESSION_CAP_S so WS /decide outlives a session
-    secrets = ["ANNIE_OPENAI_API_KEY", "ANNIE_TYPESAFE_API_KEY", "ANNIE_HMAC_SECRET", "ANNIE_ALLOWED_ORIGINS"]
+    secrets = [
+        "ANNIE_OPENAI_API_KEY", "ANNIE_TYPESAFE_API_KEY", "ANNIE_HMAC_SECRET", "ANNIE_ALLOWED_ORIGINS",
+        # Optional Rosemate integration (docs/rosemate.md); unset = off.
+        "ANNIE_ROSEMATE_MCP_URL", "ANNIE_ROSEMATE_MCP_TOKEN", "ANNIE_ROSEMATE_ACCESS_KEY",
+        "ANNIE_ROSEMATE_TOY_ACTIONS",
+    ]
 
     async def setup(self) -> None:
 
@@ -99,6 +104,34 @@ class AnnieBroker(fal.App, name="annie-broker", keep_alive=300):
     @fal.endpoint("/decide", is_websocket=True)
     async def decide_ws(self, websocket: WebSocket) -> None:
         await self.broker.decide_socket(websocket)
+
+    async def _rosemate(self, route: str, request: Request) -> JSONResponse:
+        raw = await read_limited(request)
+        if raw is None:
+            return JSONResponse({"error": "too_large"}, status_code=413)
+        ip = self.broker.client_ip(request.headers, request.client.host if request.client else None)
+        status, body = await self.broker.rosemate_raw(route, raw, ip, request.headers.get("origin"))
+        return JSONResponse(body, status_code=status)
+
+    @fal.endpoint("/rosemate/session")
+    async def rosemate_session(self, request: Request) -> JSONResponse:
+        return await self._rosemate("session", request)
+
+    @fal.endpoint("/rosemate/consent")
+    async def rosemate_consent(self, request: Request) -> JSONResponse:
+        return await self._rosemate("consent", request)
+
+    @fal.endpoint("/rosemate/action")
+    async def rosemate_action(self, request: Request) -> JSONResponse:
+        return await self._rosemate("action", request)
+
+    @fal.endpoint("/rosemate/close")
+    async def rosemate_close(self, request: Request) -> JSONResponse:
+        return await self._rosemate("close", request)
+
+    @fal.endpoint("/rosemate/events", is_websocket=True)
+    async def rosemate_events(self, websocket: WebSocket) -> None:
+        await self.broker.rosemate_socket(websocket)
 
     @fal.endpoint("/status")
     async def status_post(self) -> dict:
