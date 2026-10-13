@@ -155,7 +155,7 @@ export class GeminiLiveVoice {
       if (!this.asst.open) {
         this.asst.open = true;
         this.asst.text = "";
-        this.bus.emit("assistant.audio.start", {});
+        this.#startAssistantAudio();
       }
       this.asst.text += outputText;
       this.asst.last = now;
@@ -187,7 +187,7 @@ export class GeminiLiveVoice {
     if (!this.asst.open) {
       this.asst.open = true;
       this.asst.text = "";
-      this.bus.emit("assistant.audio.start", {});
+      this.#startAssistantAudio();
     }
     const buffer = this.audioCtx.createBuffer(1, samples.length, OUTPUT_RATE);
     buffer.copyToChannel(samples, 0);
@@ -210,7 +210,14 @@ export class GeminiLiveVoice {
     if (this.audioPending || (!this.turnComplete && !this.endAfterPlayback)) return;
     this.turnComplete = false;
     this.endAfterPlayback = false;
-    this.bus.emit("assistant.audio.end", {});
+    if (this.audioStarted) this.bus.emit("assistant.audio.end", {});
+    this.audioStarted = false;
+  }
+
+  #startAssistantAudio() {
+    if (this.audioStarted) return;
+    this.audioStarted = true;
+    this.bus.emit("assistant.audio.start", {});
   }
 
   #stopPlayback() {

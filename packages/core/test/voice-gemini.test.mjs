@@ -32,4 +32,13 @@ test("maps Gemini transcription, turn completion and interruption to the voice b
     ["assistant.audio.end", {}],
     ["bargein", {}],
   ]);
+  const userOnly = [];
+  const emptyReply = new GeminiLiveVoice({
+    bus: { emit: (type, payload) => userOnly.push([type, payload]) },
+    brokerUrl: "http://localhost:8787",
+    clock: { now: () => 2 },
+  });
+  emptyReply.handleEvent({ serverContent: { inputTranscription: { text: "Thanks" } } });
+  emptyReply.handleEvent({ serverContent: { turnComplete: true } });
+  assert.deepEqual(userOnly.map(([type]) => type), ["user.partial", "user.final"]);
 });
