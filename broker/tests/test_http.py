@@ -320,7 +320,7 @@ def test_live_socket_proxies_audio_and_returns_decide_token(make_client):
         assert c.post("/decide", json=decide_body(token=session["token"])).status_code == 200
         assert gateway.sent[0] == setup_message("gemini-3.8-live", "Kore", "Be Annie.")
         assert headers == [{"x-goog-api-key": "test-gemini-key"}]
-        assert urls[0].startswith("wss://gateway.ai.cloudflare.com/")
+        assert urls[0] == live_url(BASE.gemini_base_url)
         gateway.inbox.put_nowait(json.dumps({"setupComplete": {}}))
         assert ws.receive_json() == {"setupComplete": {}}
         audio = {"realtimeInput": {"audio": {"mimeType": "audio/pcm;rate=16000", "data": "AAA="}}}
