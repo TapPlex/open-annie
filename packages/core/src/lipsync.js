@@ -1,7 +1,7 @@
 import { clamp } from "./bus.js";
 
-// Audio-driven mouth. GPT-Live emits no visemes and its transcript timing is
-// approximate, so the mouth follows the audio the user actually hears.
+// Audio-driven mouth. Live models emit no visemes, so the mouth follows the audio
+// the user actually hears.
 // Two providers feed one feature frame {amp, db, vowels, visemes?}:
 // - "energy": loudness sets aperture, a coarse formant-band guess picks the vowel.
 //   Always on; it is the fallback when HeadAudio fails to load.

@@ -53,21 +53,12 @@ class Upstream:
         return sum(1 for r in self.requests if r.url.path == path)
 
 
-def live_session_ok(request: httpx.Request) -> httpx.Response:
-    if request.url.path == "/v1/live/sessions":
-        return httpx.Response(
-            201, json={"session": {"id": "live_123"}, "transport": {"type": "webrtc", "sdp": ANSWER}}
-        )
-    return httpx.Response(404)
-
-
 BASE = Settings(
-    openai_api_key="sk-test",
+    gemini_api_key="test-gemini-key",
     typesafe_api_key="ts-test",
     hmac_secret=b"test-secret",
+    voice_usd_per_second=0.001,
     per_ip_daily=0,
-    sideband=False,
-    hangup_fallback=False,
 )
 
 
@@ -75,11 +66,11 @@ BASE = Settings(
 def make_client():
     clients = []
 
-    def _make(settings: Settings | None = None, openai=None, typesafe=None, rosemate=None, **overrides):
+    def _make(settings: Settings | None = None, typesafe=None, rosemate=None, gemini_connect=None, **overrides):
         s = replace(settings or BASE, **overrides)
         broker = Broker(
             s,
-            openai_transport=(openai or Upstream(live_session_ok)).transport,
+            gemini_connect=gemini_connect,
             typesafe_transport=(typesafe or Upstream()).transport,
             rosemate_transport=rosemate.transport if rosemate else None,
         )

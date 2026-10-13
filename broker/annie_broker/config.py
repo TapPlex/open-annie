@@ -8,10 +8,6 @@ from dataclasses import dataclass, field
 
 VERSION = "0.1.0"
 
-# GPT-Live bills $0.05/min, per second (docs/models/gpt-live-1, 2026-09-27).
-VOICE_USD_PER_SECOND = 0.05 / 60
-# A WebRTC create bills 15 s up front, credited against the running session.
-VOICE_INIT_SECONDS = 15
 # Jev: $0.042 per million input tokens, output free (docs.typesafe.ai/models).
 JEV_USD_PER_INPUT_TOKEN = 0.042 / 1_000_000
 
@@ -39,7 +35,7 @@ def _list(name: str, default: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class Settings:
-    openai_api_key: str | None = None
+    gemini_api_key: str | None = None
     typesafe_api_key: str | None = None
     hmac_secret: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     daily_budget_usd: float = 25.0
@@ -48,7 +44,10 @@ class Settings:
     idle_timeout_s: int = 30
     per_ip_daily: int = 2  # 0 disables the per-IP limit
     jev_model: str = "jev-latest"
-    gptlive_model: str = "gpt-live-1"
+    gemini_model: str = "gemini-3.8-live"
+    gemini_base_url: str = "https://gateway.ai.cloudflare.com/v1/ac4054842a60a05296897e5f7042b4cd/winbestsai/compat"
+    gemini_voice: str = "Kore"
+    voice_usd_per_second: float | None = None
     allowed_origins: tuple[str, ...] = ("http://localhost:*", "http://127.0.0.1:*")
     # Jev allows 1,200 rpm per key; stay under it so bursts never hit 429.
     jev_rpm: int = 1000
@@ -58,15 +57,10 @@ class Settings:
     decide_timeout_s: float = 1.5
     decide_per_session_rps: float = 5.0
     token_grace_s: int = 30
-    default_voice: str = "marin"
     default_instructions: str = ""
     # Restrict what the browser data channel may send; () = upstream default (all).
     client_events: tuple[str, ...] = ()
-    sideband: bool = True
-    hangup_fallback: bool = True
-    safety_identifier: bool = False
     ip_header: str | None = None  # e.g. "x-forwarded-for" behind a trusted proxy
-    openai_base_url: str = "https://api.openai.com"
     typesafe_base_url: str = "https://api.typesafe.ai"
     # Dev only: GET /dev-token hands out /decide tokens without a voice session.
     dev: bool = False
@@ -93,7 +87,7 @@ class Settings:
         return cls(
             # fal secrets are shared by every app on an account, so the fal deploy uses
             # namespaced ANNIE_* names; plain names still work locally.
-            openai_api_key=_env("ANNIE_OPENAI_API_KEY") or _env("OPENAI_API_KEY"),
+            gemini_api_key=_env("ANNIE_GEMINI_API_KEY") or _env("GEMINI_API_KEY"),
             typesafe_api_key=_env("ANNIE_TYPESAFE_API_KEY") or _env("TYPESAFE_API_KEY"),
             hmac_secret=secret.encode() if secret else secrets.token_bytes(32),
             daily_budget_usd=_float("ANNIE_DAILY_BUDGET_USD", 25.0),
@@ -102,20 +96,23 @@ class Settings:
             idle_timeout_s=_int("ANNIE_IDLE_TIMEOUT_S", 30),
             per_ip_daily=_int("ANNIE_PER_IP_DAILY", 2),
             jev_model=_env("JEV_MODEL", "jev-latest"),
-            gptlive_model=_env("GPTLIVE_MODEL", "gpt-live-1"),
+            gemini_model=_env("ANNIE_GEMINI_MODEL") or _env("GEMINI_MODEL", "gemini-3.8-live"),
+            gemini_base_url=_env("ANNIE_GEMINI_BASE_URL") or _env(
+                "GEMINI_BASE_URL",
+                "https://gateway.ai.cloudflare.com/v1/ac4054842a60a05296897e5f7042b4cd/winbestsai/compat",
+            ),
+            gemini_voice=_env("ANNIE_GEMINI_VOICE") or _env("GEMINI_VOICE", "Kore"),
+            voice_usd_per_second=(
+                float(rate) if (rate := _env("ANNIE_VOICE_USD_PER_SECOND")) else None
+            ),
             allowed_origins=_list(
                 "ANNIE_ALLOWED_ORIGINS", "http://localhost:*,http://127.0.0.1:*"
             ),
             jev_rpm=_int("ANNIE_JEV_RPM", 1000),
             decide_timeout_s=_float("ANNIE_DECIDE_TIMEOUT_S", 1.5),
-            default_voice=_env("ANNIE_VOICE", "marin"),
             default_instructions=_env("ANNIE_INSTRUCTIONS", ""),
             client_events=_list("ANNIE_CLIENT_EVENTS", ""),
-            sideband=_bool("ANNIE_SIDEBAND", True),
-            hangup_fallback=_bool("ANNIE_HANGUP_FALLBACK", True),
-            safety_identifier=_bool("ANNIE_SAFETY_IDENTIFIER", False),
             ip_header=_env("ANNIE_IP_HEADER"),
-            openai_base_url=_env("OPENAI_BASE_URL", "https://api.openai.com"),
             typesafe_base_url=_env("TYPESAFE_BASE_URL", "https://api.typesafe.ai"),
             dev=_bool("ANNIE_DEV", False),
             dev_token_ttl_s=_int("ANNIE_DEV_TOKEN_TTL_S", 900),
@@ -135,5 +132,9 @@ class Settings:
         )
 
     @property
-    def session_cap_usd(self) -> float:
-        return self.session_cap_s * VOICE_USD_PER_SECOND
+    def session_cap_usd(self) -> float | None:
+        return (
+            self.session_cap_s * self.voice_usd_per_second
+            if self.voice_usd_per_second is not None
+            else None
+        )

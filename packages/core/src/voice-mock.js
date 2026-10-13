@@ -1,10 +1,10 @@
 import { analyseClip, clipFeatureAt } from "./lipsync.js";
 
 // Scripted voice: plays pre-rendered lines on a timeline and emits the same bus
-// events GPT-Live would (transcript deltas, audio start/end, barge-in). Drives the
+// events the live provider uses (transcript deltas, audio start/end, barge-in). Drives the
 // keyless preview and the deterministic demo capture.
 
-// GPT-Live transcript deltas run ahead of audible speech; simulate a small lead.
+// Live transcript deltas run ahead of audible speech; simulate a small lead.
 const TRANSCRIPT_LEAD = 0.12;
 
 export function buildTimeline(lines, plan) {

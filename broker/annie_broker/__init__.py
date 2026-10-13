@@ -1,4 +1,4 @@
-"""open-annie broker core: GPT-Live session minting and a Jev proxy."""
+"""open-annie broker core: Gemini Live relay and a Jev proxy."""
 
 from .app import Broker, create_app
 from .config import VERSION, Settings

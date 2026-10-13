@@ -25,7 +25,7 @@ demo/                     the keyless preview's script and voice lines, the reco
 | Route | In | Out |
 |---|---|---|
 | `GET /health` | – | `{ok, version, providers: {voice: bool, decide: bool}}` |
-| `POST /session` | `{sdp, voice?, instructions?}` JSON | `{sdp, session_id, expires_at, token}` — SDP answer from GPT-Live, minted with the server key. `token` is an HMAC (session_id + expiry) required by `/decide`. |
+| `WS /live` | First frame `{type:"annie.setup", instructions?}`, then Gemini `realtimeInput` frames | Gemini Live setup/events and broker `{type:"annie.session", session_id, expires_at, token}`. The broker keeps the Gemini key server-side; `token` is an HMAC required by `/decide`. |
 | `POST /decide` | `{token, state, questions}` (Jev `systemone` body minus `model`) | Jev response passthrough `{answers, usage}` plus `latency_ms`. 503 `{error:"decide_unavailable"}` when no key / breaker open / rate-shaped; the browser then uses its local floor. |
 | `WS /decide` | same JSON per message, plus `id` | same JSON per reply, echoing `id` |
 | `GET /status` | – | `{spent_today_usd, budget_usd, active_sessions, max_sessions, voice_seconds_today}` |
@@ -52,10 +52,10 @@ Upstream error bodies are never forwarded. No transcripts are retained.
 
 ## Providers (capability-flagged, one file each)
 
-- Voice: `gptlive` (WebRTC via broker `/session`), `mock` (scripted audio + timed transcript deltas).
+- Voice: `gemini` (PCM WebSocket via broker `/live` and Cloudflare AI Gateway), `mock` (scripted audio + timed transcript deltas).
 - Decision: `broker` (Jev via `/decide`), `floor` (deterministic keyword/regex rules, always on as fallback).
-- Lipsync: `headaudio` (vendored MIT worklet, 15 Oculus visemes per 16 ms frame; live on the WebRTC
-  track, offline over decoded clips keyed by audio time), `energy` (RMS + spectral vowel guess; loudness
+- Lipsync: `headaudio` (vendored MIT worklet, 15 Oculus visemes per 16 ms frame; live on Gemini's decoded
+  audio, offline over decoded clips keyed by audio time), `energy` (RMS + spectral vowel guess; loudness
   for both, and the whole mouth if HeadAudio fails to load; `?lipsync=energy` forces it). Feature frame:
   `{amp, db, vowels, visemes?: {t, p[15]}}` → `mouth.js` (`createMouth(vrm)` → `update(f, now, dt)` →
   `{aa, ih, ou, ee, oh, open, viseme}`; `apply(em, w, faceW)` writes the mouth). Measured in `lipsync-eval/`.

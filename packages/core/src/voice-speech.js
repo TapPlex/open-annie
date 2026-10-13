@@ -2,25 +2,22 @@ import { clamp } from "./bus.js";
 
 // Speech for avatar actions (talk) through the browser's Web Speech API.
 //
-// This is a labelled FALLBACK. GPT-Live, open-annie's voice, has no "say this text"
-// command: its data channel accepts session.close, mute/unmute and the instruction,
-// thinking and commentary appends (broker/UPSTREAM.md §1.4), none of which speak a given
-// line, and GPT-Live is not the Realtime API (no response.create). So a talk action is
+// This is a labelled FALLBACK. The live voice has no "say this text" command, so a talk action is
 // spoken by the browser's own synthesizer instead.
 //
 // Limits, stated honestly:
 // - The browser needs a user gesture first (activate() from a click), or speak() fails
 //   with "needs_activation". Nothing is reported as spoken unless the synthesizer starts.
 // - Its audio can't be tapped, so the mouth is approximated from word boundaries and a
-//   syllable rhythm (frame()), not analysed like the GPT-Live or scripted audio.
+//   syllable rhythm (frame()), not analysed like the live or scripted audio.
 // - Voice and quality depend on the OS/browser. Local voices are preferred; some
 //   browsers only have network voices, which send the text to the browser vendor.
 //
 // Bus events: speech.start {text} when audio actually starts, speech.end {text, ok, error?}
-// when it ends or is cut. Deliberately not assistant.*: those mean a GPT-Live/scripted
+// when it ends or is cut. Deliberately not assistant.*: those mean a live/scripted
 // model turn, feed Jev and the conversation history, and must not be faked.
 
-export const SPEECH_LABEL = "browser speech synthesis (fallback: GPT-Live has no text-to-speech command)";
+export const SPEECH_LABEL = "browser speech synthesis (fallback: the live model has no text-to-speech command)";
 const START_TIMEOUT_S = 3;
 const SYLLABLE_HZ = 4.2;
 

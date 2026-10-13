@@ -1,8 +1,8 @@
 <!doctype html><meta charset="utf-8"><title>live probe</title>
 <script type="module">
-// Smoke test: synthetic mic → GPT-Live via broker; logs every data-channel event.
+// Smoke test: synthetic mic → Gemini Live via broker; logs proxied WebSocket events.
 import { Bus } from "../packages/core/src/bus.js";
-import { GptLiveVoice } from "../packages/core/src/voice-gptlive.js";
+import { GeminiLiveVoice } from "../packages/core/src/voice-gemini.js";
 const q = new URLSearchParams(location.search);
 const ctx = new AudioContext();
 const dest = ctx.createMediaStreamDestination();
@@ -10,7 +10,7 @@ const t0 = performance.now();
 const log = [];
 window.probe = { log, done: false };
 const bus = new Bus();
-const v = new GptLiveVoice({ bus, brokerUrl: q.get("broker"), clock: { now: () => (performance.now() - t0) / 1000 }, mic: dest.stream,
+const v = new GeminiLiveVoice({ bus, brokerUrl: q.get("broker"), clock: { now: () => (performance.now() - t0) / 1000 }, mic: dest.stream,
   instructions: "You are Annie, a friendly AI character. Keep replies to one or two short sentences.",
   onRaw: (e) => log.push({ t: (performance.now() - t0) / 1000, type: e.type, e: JSON.stringify(e).slice(0, 300) }) });
 try {
