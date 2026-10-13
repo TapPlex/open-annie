@@ -50,6 +50,13 @@ export class Hud {
     });
     bus.on("decision", (d) => this.#decision(d));
     bus.on("cue.face", (c) => this.#local(c));
+    // Optional browser speech (rosemate avatar actions): caption the spoken line.
+    bus.on("speech.start", ({ text }) => this.#say("annie", text, false));
+    bus.on("speech.end", ({ text, ok }) => {
+      const m = this.cur.annie;
+      this.#say("annie", text, true);
+      if (m && !ok) m.cut = true;
+    });
   }
 
   setHonesty(text) {

@@ -30,6 +30,11 @@ demo/                     the keyless preview's script and voice lines, the reco
 | `WS /decide` | same JSON per message, plus `id` | same JSON per reply, echoing `id` |
 | `GET /status` | – | `{spent_today_usd, budget_usd, active_sessions, max_sessions, voice_seconds_today}` |
 
+Optional (off unless configured, [rosemate.md](rosemate.md)): `POST /rosemate/session {access_key, toy_actions?}` →
+`{token, expires_at, features, toy_consent}`; `POST /rosemate/consent|action|close {token, …}`; `WS /rosemate/events`
+(first message `{token}`) → `{type: "status"|"command"|"rejected"|"error"}`. The integration token is scoped: it
+is not accepted by `/decide`, and voice tokens are not accepted here.
+
 Upstream error bodies are never forwarded. No transcripts are retained.
 
 ## Browser core event bus
@@ -42,6 +47,8 @@ Upstream error bodies are never forwarded. No transcripts are retained.
 - `bargein {}`
 - `decision {kind: "listen"|"reply", answers, latency_ms, source: "jev"|"floor"|"mock"}`
 - `cue.face {name, intensity}` / `cue.clip {name, energy}` / `cue.reaction {name}`
+- `speech.start {text, source: "tts"}` / `speech.end {text, source, ok, error?}`: optional browser speech for
+  avatar `talk` actions (`voice-speech.js`). Kept apart from `assistant.*`, which means a model turn.
 
 ## Providers (capability-flagged, one file each)
 
@@ -111,6 +118,8 @@ feature frame times the gesture strokes; the user's voice activity drives listen
 `setTalkTrack(packUrlOrPack, audioStart, audioFile?)`: time-lock a per-take talk track to the audio
 timeline (`stage.js` calls it when replaying a recorded session). `current` is the base source
 `{name, rate, kind, ...}`; `guard.stats` reports the collision guard per frame.
+`vrm.scene` is the avatar root. Only the optional avatar `position` action (`actions.js` `PositionMover`) moves it,
+within ±0.6 m of home, and never touches the skeleton.
 
 Every source is sampled directly (no mixer) and every switch is inertialized (see "Runtime body
 order"): idle / listen loops, calm-idle `kind: "fidget"` one-shots every 6-12 s, Jev-picked clips; the

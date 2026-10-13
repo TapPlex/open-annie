@@ -16,9 +16,13 @@ The broker (`broker/`) is the only server, and it holds the API keys:
 - It enforces allowed origins, a per-session time cap, an idle hangup, per-IP daily limits and a
   daily dollar budget, and it never forwards upstream error bodies.
 - It does not log or retain transcripts.
+- The optional Rosemate integration ([docs/rosemate.md](docs/rosemate.md)) keeps the Rosemate token on the
+  broker. It needs an operator access key plus a scoped, expiring session for every route, sanitizes inbound toy
+  commands, and only sends toy actions after an explicit opt-in. It is single tenant: anyone with the access key
+  shares the one configured account.
 
-Reports about bypassing those limits, leaking keys or tokens, or spending someone else's budget
-are the most useful. In the browser, transcripts are untrusted text; report any way to get markup
+Reports about bypassing those limits, leaking keys or tokens, spending someone else's budget, or
+driving a toy without authorization and consent are the most useful. In the browser, transcripts are untrusted text; report any way to get markup
 or script into the page through them.
 
 ## Supported versions

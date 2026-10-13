@@ -103,3 +103,16 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); 
   .bar { left: 50%; width: calc(100% - var(--u) * 6); }
   .stats { display: none; }
 }
+
+/* ---- optional Rosemate panel (?rosemate, docs/rosemate.md) ---- */
+.rosemate { position: absolute; left: calc(var(--u) * 3); top: calc(var(--u) * 5); width: calc(var(--u) * 19); padding: 0.9em 1em; border-radius: 1em;
+  background: var(--card); box-shadow: var(--shadow); backdrop-filter: blur(12px); font-size: calc(var(--u) * 0.72); color: var(--ink-2); display: flex; flex-direction: column; gap: 0.55em; }
+.rosemate h2 { margin: 0; font-size: 1.1em; font-weight: 600; color: var(--ink); }
+.rosemate .rm-label, .rosemate .rm-state { color: var(--muted); }
+.rosemate .rm-row { display: flex; flex-wrap: wrap; gap: 0.4em; align-items: center; }
+.rosemate .rm-row[hidden] { display: none; }
+.rosemate button, .rosemate input[type="password"] { font: inherit; padding: 0.35em 0.7em; border-radius: 99px; border: 1px solid var(--line); background: #fff; color: var(--ink); }
+.rosemate input[type="password"] { flex: 1; min-width: 0; border-radius: 0.6em; }
+.rosemate button:disabled { color: var(--muted); }
+.rosemate .rm-stop { border-color: #ef4444; color: #b91c1c; font-weight: 600; }
+.rosemate .rm-log { white-space: pre-wrap; font-family: "Geist Mono", monospace; font-size: 0.9em; color: var(--muted); min-height: 1em; }

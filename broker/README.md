@@ -26,6 +26,7 @@ Source of truth: [`docs/contracts.md`](../docs/contracts.md).
 | `POST /decide` | `{token, state, questions}` | Jev `{model, answers, usage}` + `latency_ms` |
 | `WS /decide` | same JSON + `id` per message | same JSON + `id` per reply (replies may arrive out of order) |
 | `GET /status` | – | `{spent_today_usd, budget_usd, active_sessions, max_sessions, voice_seconds_today}` |
+| `POST /rosemate/{session,consent,action,close}`, `WS /rosemate/events` | – | optional Rosemate integration, off unless configured: [docs/rosemate.md](../docs/rosemate.md) |
 
 - `expires_at` is the broker's hard cap (Unix seconds). The session is closed then.
 - `token` is `session_id.expiry.hmac` and is valid until `expires_at + 30 s`.
@@ -103,6 +104,7 @@ After the first deploy, check which `X-Forwarded-For` the fal gateway sends and 
 | `ANNIE_HANGUP_FALLBACK` | 1 | without a sideband, call `/hangup` at the cap |
 | `ANNIE_IP_HEADER` | – (fal: `x-forwarded-for`) | header holding the client IP (leftmost entry) |
 | `ANNIE_SAFETY_IDENTIFIER` | 0 | send a hashed IP as `OpenAI-Safety-Identifier` |
+| `ANNIE_ROSEMATE_*` | – (off) | optional Rosemate integration; full table in [docs/rosemate.md](../docs/rosemate.md#setup) |
 
 ## Cost notes
 
@@ -123,13 +125,17 @@ After the first deploy, check which `X-Forwarded-For` the fal gateway sends and 
   audio without decoding it.
 - IPs exist only as keyed hashes in memory, for the per-IP counter. They reset daily and on restart.
 - Logs hold status codes, close reasons and error class names only.
-- There are no analytics, cookies or third-party calls beyond OpenAI and TypeSafe.
+- There are no analytics, cookies or third-party calls beyond OpenAI and TypeSafe, plus Rosemate only when the
+  optional integration is configured ([docs/rosemate.md](../docs/rosemate.md)). Then the broker subscribes to
+  that account's toy command stream and, after a user opts in, sends the toy actions they click. It forwards
+  command ids, actions, intensities and timestamps to authorized stages, drops Rosemate's free-text `reason`, and
+  logs only error classes and status codes. The Rosemate token never leaves the broker.
 - GPT-Live `store` is left at its default (`false`), so OpenAI keeps no recording for forking.
 
 ## Layout
 
 ```
-annie_broker/  config · tokens · voice · decide · budget · reaper · app (Broker + create_app)
+annie_broker/  config · tokens · voice · decide · budget · reaper · rosemate (optional) · app (Broker + create_app)
 fal_app.py     fal App exposing the same Broker
 local.py       uvicorn runner (port 8787)
 tests/         pytest, mocked upstreams (httpx.MockTransport)
@@ -139,6 +145,7 @@ UPSTREAM.md    verified upstream API facts + live Jev measurements
 ## Deploy notes (fal 1.79, verified 2026-09-28)
 
 - Deployed at `https://fal.run/<owner>/annie-broker` (routes `/health`, `/status`, `/session`, `/decide`, WS `/decide`).
+  The optional `/rosemate/*` routes use the same endpoint mechanism but have **not** been deployed or verified on fal.
 - Secrets use namespaced names (`ANNIE_OPENAI_API_KEY`, `ANNIE_TYPESAFE_API_KEY`, `ANNIE_HMAC_SECRET`,
   `ANNIE_ALLOWED_ORIGINS`), because fal secrets are shared by every app on the account.
 - If `FAL_KEY` is set in your shell (e.g. an API-scoped key), the CLI uses it instead of your login and
