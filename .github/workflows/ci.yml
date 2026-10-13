@@ -42,3 +42,5 @@ jobs:
           for f in packages/core/src/*.js stage/*.js demo/*.mjs motion/blender/*.mjs; do
             node --input-type=module --check < "$f" || { echo "syntax error in $f"; exit 1; }
           done
+      # Pure-module unit tests (mocks only: no network, audio, hardware or three.js).
+      - run: node --test packages/core/test/*.test.mjs

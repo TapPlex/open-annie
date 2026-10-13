@@ -155,6 +155,7 @@ hud.setHonesty(
 hud.setMode(session ? "recorded" : "preview");
 
 let last = 0;
+let rosemate = null; // optional integration (?rosemate): avatar actions in idle/live modes only
 // mode: "script" drives the scripted timeline; "idle" and "live" run on their own clocks.
 function step(t, mode = "script") {
   const dt = Math.min(0.1, Math.max(0, t - last));
@@ -172,6 +173,10 @@ function step(t, mode = "script") {
     f = live.tick(t, shaper.speaking);
     userSpeaking = live.userVoiced;
     userLevel = live.micLevel ?? (userSpeaking ? 0.5 : 0);
+  }
+  if (rosemate && mode !== "script") {
+    if (mode === "idle") f = rosemate.frame(t) ?? f; // browser speech: approximate mouth
+    rosemate.update(t); // avatar root position
   }
   const mouth = shaper.update(f, t, dt || 1 / 60);
   character.setMouth(mouth, shaper.speaking || !!window.capture?.forceSpeaking);
@@ -228,6 +233,19 @@ if (CAPTURE) {
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
+  if (params.has("rosemate") && !session) {
+    // Optional, opt-in Rosemate integration (docs/rosemate.md); absent unless asked for.
+    try {
+      const { startRosemate } = await import("./rosemate.js");
+      rosemate = await startRosemate({
+        bus, character, brokerUrl: params.get("broker"), now: wall, getMode: () => mode,
+        isLive: () => mode === "live", mapUrl: params.get("rosemateMap"),
+      });
+      addEventListener("pagehide", () => rosemate?.dispose(), { once: true });
+    } catch (e) {
+      console.warn("rosemate integration unavailable:", e.message);
+    }
+  }
   if (LIVE) {
     btn.textContent = "🎙 Talk to Annie";
     hud.setHonesty("live · voice: GPT-Live-1 over WebRTC · decisions: Jev via broker · lipsync, face and body computed in the browser");
@@ -255,6 +273,7 @@ if (CAPTURE) {
       mode = "live";
       return;
     }
+    rosemate?.suspend();
     mode = "script";
     const ctx = new AudioContext();
     const a0 = ctx.currentTime + 0.1;
