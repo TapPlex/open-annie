@@ -2,10 +2,9 @@
 
 open-annie's only server. It does two jobs:
 
-1. **Mints GPT-Live voice sessions.** The browser sends its WebRTC SDP offer. The broker exchanges it with
-   OpenAI (`POST /v1/live/sessions`) using the server's key and returns the SDP answer. GPT-Live has no browser-safe
-   ephemeral keys (see [UPSTREAM.md](UPSTREAM.md)). Audio then flows browser ⇄ OpenAI directly; the broker never
-   touches media.
+1. **Relays Gemini Live voice.** The browser streams PCM audio over `WS /live`. The broker connects to
+   Gemini through Cloudflare AI Gateway, keeps the API key server-side, applies session/IP/budget limits,
+   and forwards audio and events in both directions.
 2. **Proxies TypeSafe Jev.** Jev rejects browser CORS and the key must stay server-side. The broker keeps one warm
    HTTP/2 pool to `api.typesafe.ai`, applies a 1.5 s deadline (`ANNIE_DECIDE_TIMEOUT_S`; the browser enforces its own tighter budgets) with zero retries, and trips a circuit breaker after
    3 straight failures (open for 30 s). A token-bucket governor keeps it under Jev's 1,200 rpm. Every failure becomes
@@ -22,7 +21,7 @@ Source of truth: [`docs/contracts.md`](../docs/contracts.md).
 | Route | In | Out |
 |---|---|---|
 | `GET /health` | – | `{ok, version, providers: {voice, decide}}` |
-| `POST /session` | `{sdp, voice?, instructions?}` | `{sdp, session_id, expires_at, token}` |
+| `WS /live` | First frame `{type:"annie.setup", instructions?}` then Gemini `realtimeInput` | Gemini Live events and broker session token |
 | `POST /decide` | `{token, state, questions}` | Jev `{model, answers, usage}` + `latency_ms` |
 | `WS /decide` | same JSON + `id` per message | same JSON + `id` per reply (replies may arrive out of order) |
 | `GET /status` | – | `{spent_today_usd, budget_usd, active_sessions, max_sessions, voice_seconds_today}` |
@@ -42,11 +41,11 @@ Errors are always `{error: code}` and never contain upstream bodies:
 | 413 | `too_large` | body > 64 KB |
 | 422 | `decide_invalid` | Jev rejected the question shape |
 | 429 | `budget_exhausted` / `ip_limit` / `at_capacity` | admission control |
-| 502 | `voice_upstream_error` | OpenAI failed to mint |
-| 503 | `voice_unavailable` / `voice_busy` / `voice_no_credit` | no OpenAI key / OpenAI concurrency limit / OpenAI balance empty |
+| 503 | `voice_unavailable` | Gemini API key or positive voice-cost estimate is missing |
 | 503 | `decide_unavailable` (+ `reason`) | `no_key`, `disabled`, `breaker_open`, `timeout`, `rate_limited`, `session_rate_limited`, `upstream_error`, `too_many_inflight` |
 
-The browser-side WebRTC steps, data-channel label (`oai-events`) and event shapes are in [UPSTREAM.md §1.4](UPSTREAM.md).
+The Gemini Live setup/event protocol, Cloudflare Gateway route, PCM formats and current verification limits
+are documented in [UPSTREAM.md](UPSTREAM.md).
 
 ## Run locally
 
@@ -67,7 +66,8 @@ unless `ANNIE_DEV=1` and does not exist on fal.
 ## Deploy on fal
 
 ```bash
-fal secrets set OPENAI_API_KEY=sk-... TYPESAFE_API_KEY=... \
+fal secrets set ANNIE_GEMINI_API_KEY="$GEMINI_API_KEY" ANNIE_TYPESAFE_API_KEY="$TYPESAFE_API_KEY" \
+    ANNIE_GEMINI_BASE_URL=https://gateway.ai.cloudflare.com/v1/ac4054842a60a05296897e5f7042b4cd/winbestsai/compat \
     ANNIE_HMAC_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(32))")
 fal secrets set ANNIE_ALLOWED_ORIGINS=https://your-stage.example.com
 fal deploy broker/fal_app.py::AnnieBroker --app-name annie-broker --auth public
@@ -85,33 +85,32 @@ After the first deploy, check which `X-Forwarded-For` the fal gateway sends and 
 
 | Env | Default | |
 |---|---|---|
-| `OPENAI_API_KEY` | – | enables `/session` |
+| `GEMINI_API_KEY` / `ANNIE_GEMINI_API_KEY` | – | server-side Gemini key; enables `WS /live` |
+| `GEMINI_BASE_URL` / `ANNIE_GEMINI_BASE_URL` | Cloudflare AI Gateway compat endpoint | upstream Gateway base URL |
+| `GEMINI_MODEL` / `ANNIE_GEMINI_MODEL` | `gemini-3.8-live` | Gemini Live model |
+| `GEMINI_VOICE` / `ANNIE_GEMINI_VOICE` | `Kore` | Google Live voice name |
+| `ANNIE_VOICE_USD_PER_SECOND` | required | positive spend estimate from current Gemini audio-token pricing; voice stays unavailable until set |
 | `TYPESAFE_API_KEY` | – | enables `/decide` |
 | `ANNIE_HMAC_SECRET` | random per process | set it, or tokens die on restart |
-| `ANNIE_DAILY_BUDGET_USD` | 25 | voice seconds × $0.05/60 + Jev tokens × $0.042/M |
+| `ANNIE_DAILY_BUDGET_USD` | 25 | estimated voice cost + Jev tokens × $0.042/M |
 | `ANNIE_MAX_SESSIONS` | 20 | concurrent voice sessions |
 | `ANNIE_SESSION_CAP_S` | 180 | hard per-session cap |
-| `ANNIE_IDLE_TIMEOUT_S` | 30 | close after this long with no speech (needs the sideband) |
+| `ANNIE_IDLE_TIMEOUT_S` | 30 | close after this long with no transcript or generated output |
 | `ANNIE_PER_IP_DAILY` | 2 (0 locally) | sessions per IP per UTC day; 0 = off |
 | `ANNIE_ALLOWED_ORIGINS` | `http://localhost:*,http://127.0.0.1:*` | comma list; `*` wildcards; `*` alone = any |
-| `JEV_MODEL` / `GPTLIVE_MODEL` | `jev-latest` / `gpt-live-1` | |
+| `JEV_MODEL` | `jev-latest` | |
 | `ANNIE_JEV_RPM` | 1000 | governor rate (Jev limit is 1,200) |
 | `ANNIE_DECIDE_TIMEOUT_S` | 1.5 | server-side Jev deadline |
 | `ANNIE_DEV` | 0 (1 locally, forced 0 on fal) | enables `GET /dev-token` → `{token, expires_at}` for /decide without a voice session |
-| `ANNIE_VOICE` / `ANNIE_INSTRUCTIONS` | `marin` / empty | defaults when the browser sends none |
-| `ANNIE_CLIENT_EVENTS` | empty (upstream allows all) | e.g. `session.close,session.input_audio.mute,session.input_audio.unmute` to lock down the data channel |
-| `ANNIE_SIDEBAND` | 1 | attach to each session to read usage and close it; 0 = wall-clock only |
-| `ANNIE_HANGUP_FALLBACK` | 1 | without a sideband, call `/hangup` at the cap |
+| `ANNIE_INSTRUCTIONS` | empty | fallback system instructions when the browser sends none |
 | `ANNIE_IP_HEADER` | – (fal: `x-forwarded-for`) | header holding the client IP (leftmost entry) |
-| `ANNIE_SAFETY_IDENTIFIER` | 0 | send a hashed IP as `OpenAI-Safety-Identifier` |
 | `ANNIE_ROSEMATE_*` | – (off) | optional Rosemate integration; full table in [docs/rosemate.md](../docs/rosemate.md#setup) |
 
 ## Cost notes
 
-- **Voice.** $0.05/min, billed per second. Every WebRTC session is billed at least 15 s. A full 180 s session costs
-  $0.15, so the $25 default allows about 166 capped sessions a day. Admission reserves each open session at its cap,
-  so concurrent sessions can't overshoot. With the sideband attached, spend uses OpenAI's reported
-  `usage.seconds`. Without it, spend is wall-clock from mint until the cap, which is conservative.
+- **Voice.** Gemini Live bills audio by tokens; the broker has no provider-side usage stream and estimates spend
+  from elapsed session seconds using `ANNIE_VOICE_USD_PER_SECOND`. Set that value from current model/audio pricing.
+  Admission reserves each open session at its cap. This estimate is not a billing quote or live usage measurement.
 - **Jev.** About $0.000017 per decision (about 400 input tokens). Measured p50 is 108 ms and p90 149 ms from a dev box
   (UPSTREAM.md §2.5).
 - **fal runner.** One CPU `S` runner stays warm all day (`min_concurrency=1`). fal bills runner lifetime per second, but
@@ -121,21 +120,20 @@ After the first deploy, check which `X-Forwarded-For` the fal gateway sends and 
 ## Privacy
 
 - The broker keeps **no transcripts and no state text**. `/decide` bodies go straight to Jev and are never logged
-  or stored. The sideband reaper reads only event types, timestamps and usage seconds, and it skips reflected
-  audio without decoding it.
+  or stored. The live WebSocket forwards transcript and audio frames without recording them.
 - IPs exist only as keyed hashes in memory, for the per-IP counter. They reset daily and on restart.
 - Logs hold status codes, close reasons and error class names only.
-- There are no analytics, cookies or third-party calls beyond OpenAI and TypeSafe, plus Rosemate only when the
+- There are no analytics, cookies or third-party calls beyond Cloudflare AI Gateway, Gemini and TypeSafe, plus Rosemate only when the
   optional integration is configured ([docs/rosemate.md](../docs/rosemate.md)). Then the broker subscribes to
   that account's toy command stream and, after a user opts in, sends the toy actions they click. It forwards
   command ids, actions, intensities and timestamps to authorized stages, drops Rosemate's free-text `reason`, and
   logs only error classes and status codes. The Rosemate token never leaves the broker.
-- GPT-Live `store` is left at its default (`false`), so OpenAI keeps no recording for forking.
+- If a Gemini API key was shared in chat or logs, rotate it before deployment.
 
 ## Layout
 
 ```
-annie_broker/  config · tokens · voice · decide · budget · reaper · rosemate (optional) · app (Broker + create_app)
+annie_broker/  config · tokens · voice · decide · budget · rosemate (optional) · app (Broker + create_app)
 fal_app.py     fal App exposing the same Broker
 local.py       uvicorn runner (port 8787)
 tests/         pytest, mocked upstreams (httpx.MockTransport)
@@ -144,9 +142,9 @@ UPSTREAM.md    verified upstream API facts + live Jev measurements
 
 ## Deploy notes (fal 1.79, verified 2026-09-28)
 
-- Deployed at `https://fal.run/<owner>/annie-broker` (routes `/health`, `/status`, `/session`, `/decide`, WS `/decide`).
+- Deployed at `https://fal.run/<owner>/annie-broker` (routes `/health`, `/status`, WS `/live`, `/decide`).
   The optional `/rosemate/*` routes use the same endpoint mechanism but have **not** been deployed or verified on fal.
-- Secrets use namespaced names (`ANNIE_OPENAI_API_KEY`, `ANNIE_TYPESAFE_API_KEY`, `ANNIE_HMAC_SECRET`,
+- Secrets use namespaced names (`ANNIE_GEMINI_API_KEY`, `ANNIE_TYPESAFE_API_KEY`, `ANNIE_HMAC_SECRET`,
   `ANNIE_ALLOWED_ORIGINS`), because fal secrets are shared by every app on the account.
 - If `FAL_KEY` is set in your shell (e.g. an API-scoped key), the CLI uses it instead of your login and
   `fal secrets set` fails with `serverless:secrets:write`; run the CLI with `env -u FAL_KEY`.

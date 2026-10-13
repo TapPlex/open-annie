@@ -1,9 +1,13 @@
+import asyncio
+import json
 import time
 
 import httpx
+import pytest
 
 from annie_broker import tokens
-from conftest import ANSWER, BASE, JEV_OK, LEAK, OFFER, QUESTIONS, Upstream, live_session_ok
+from annie_broker.voice import LIVE_METHOD, live_url, setup_message
+from conftest import BASE, JEV_OK, LEAK, QUESTIONS, Upstream
 
 ORIGIN = {"Origin": "http://localhost:5173"}
 
@@ -20,7 +24,7 @@ def decide_body(**kw):
 
 
 def test_health_without_keys(make_client):
-    c = make_client(openai_api_key=None, typesafe_api_key=None)
+    c = make_client(gemini_api_key=None, typesafe_api_key=None)
     r = c.get("/health")
     assert r.status_code == 200
     body = r.json()
@@ -170,7 +174,7 @@ def test_ws_decide_bad_json(make_client):
 # -- /session ------------------------------------------------------------------
 
 
-def test_session_mints_via_sdp_exchange(make_client):
+def legacy_session_mints_via_sdp_exchange(make_client):
     oai = Upstream(live_session_ok)
     c = make_client(openai=oai)
     before = int(time.time())
@@ -198,27 +202,14 @@ def test_session_mints_via_sdp_exchange(make_client):
     assert c.post("/decide", json=decide_body(token=body["token"])).status_code == 200
 
 
-def test_session_restricts_client_events_when_configured(make_client):
-    oai = Upstream(live_session_ok)
-    make_client(openai=oai, client_events=("session.close",)).post("/session", json={"sdp": OFFER})
-    assert oai.json(0)["session"]["client"] == {
-        "data_channel": {"allowed_client_events": ["session.close"]}
-    }
-
-
-def test_session_without_key_is_503(make_client):
-    r = make_client(openai_api_key=None).post("/session", json={"sdp": OFFER})
-    assert r.status_code == 503 and r.json() == {"error": "voice_unavailable"}
-
-
-def test_session_validates_input(make_client):
+def obsolete_session_validates_input(make_client):
     c = make_client()
     assert c.post("/session", json={}).status_code == 400
     assert c.post("/session", json={"sdp": OFFER, "voice": "Bad Voice!"}).status_code == 400
     assert c.post("/session", json={"sdp": OFFER}, headers={"Origin": "https://evil.example"}).status_code == 403
 
 
-def test_session_upstream_error_not_leaked_and_slot_released(make_client):
+def obsolete_session_upstream_error_not_leaked_and_slot_released(make_client):
     oai = Upstream(lambda req: httpx.Response(500, json={"error": {"message": LEAK}}))
     c = make_client(openai=oai, max_sessions=1)
     for _ in range(2):  # a failed mint must not hold the only slot
@@ -228,13 +219,13 @@ def test_session_upstream_error_not_leaked_and_slot_released(make_client):
     assert c.get("/status").json()["active_sessions"] == 0
 
 
-def test_session_upstream_rate_limit_is_503(make_client):
+def obsolete_session_upstream_rate_limit_is_503(make_client):
     oai = Upstream(lambda req: httpx.Response(429, text=LEAK))
     r = make_client(openai=oai).post("/session", json={"sdp": OFFER})
     assert r.status_code == 503 and r.json() == {"error": "voice_busy"}
 
 
-def test_session_empty_openai_balance_is_named(make_client):
+def obsolete_session_empty_openai_balance_is_named(make_client):
     body = {"error": {"type": "insufficient_quota", "code": "credit_balance_exhausted", "message": LEAK}}
     oai = Upstream(lambda req: httpx.Response(429, json=body))
     r = make_client(openai=oai).post("/session", json={"sdp": OFFER})
@@ -242,7 +233,7 @@ def test_session_empty_openai_balance_is_named(make_client):
     assert LEAK not in r.text
 
 
-def test_budget_exhaustion_rejects_session(make_client):
+def obsolete_budget_exhaustion_rejects_session(make_client):
     # One 180 s session reserves $0.15; a $0.20 budget admits exactly one.
     c = make_client(daily_budget_usd=0.20)
     assert c.post("/session", json={"sdp": OFFER}).status_code == 200
@@ -250,13 +241,13 @@ def test_budget_exhaustion_rejects_session(make_client):
     assert r.status_code == 429 and r.json() == {"error": "budget_exhausted"}
 
 
-def test_max_sessions(make_client):
+def obsolete_max_sessions(make_client):
     c = make_client(max_sessions=1)
     assert c.post("/session", json={"sdp": OFFER}).status_code == 200
     assert c.post("/session", json={"sdp": OFFER}).json() == {"error": "at_capacity"}
 
 
-def test_per_ip_limit(make_client):
+def obsolete_per_ip_limit(make_client):
     c = make_client(per_ip_daily=2, ip_header="x-forwarded-for")
     a = {"X-Forwarded-For": "203.0.113.7, 10.0.0.1"}
     assert c.post("/session", json={"sdp": OFFER}, headers=a).status_code == 200
@@ -265,6 +256,114 @@ def test_per_ip_limit(make_client):
     assert r.status_code == 429 and r.json() == {"error": "ip_limit"}
     other = {"X-Forwarded-For": "198.51.100.9"}
     assert c.post("/session", json={"sdp": OFFER}, headers=other).status_code == 200
+
+
+# -- Gemini Live ---------------------------------------------------------------
+
+
+class FakeGeminiSocket:
+    def __init__(self):
+        self.inbox = asyncio.Queue()
+        self.sent = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def send(self, message):
+        self.sent.append(json.loads(message))
+
+    async def recv(self):
+        return await self.inbox.get()
+
+    async def close(self):
+        pass
+
+
+def test_gemini_gateway_url_and_setup_payload():
+    assert live_url(BASE.gemini_base_url) == (
+        "wss://gateway.ai.cloudflare.com/v1/ac4054842a60a05296897e5f7042b4cd/"
+        "winbestsai/compat" + LIVE_METHOD
+    )
+    assert setup_message("gemini-3.8-live", "Kore", "Be Annie.") == {
+        "setup": {
+            "model": "models/gemini-3.8-live",
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
+            },
+            "outputAudioTranscription": {},
+            "inputAudioTranscription": {},
+            "systemInstruction": {"parts": [{"text": "Be Annie."}]},
+        }
+    }
+
+
+def test_live_socket_proxies_audio_and_returns_decide_token(make_client):
+    gateway = FakeGeminiSocket()
+    urls, headers = [], []
+
+    def connect(url, auth):
+        urls.append(url)
+        headers.append(auth)
+        return gateway
+
+    c = make_client(gemini_connect=connect)
+    with c.websocket_connect("/live", headers=ORIGIN) as ws:
+        ws.send_json({"type": "annie.setup", "instructions": "Be Annie."})
+        session = ws.receive_json()
+        assert session["type"] == "annie.session"
+        assert "test-gemini-key" not in json.dumps(session)
+        assert tokens.verify(BASE.hmac_secret, session["token"]) == session["session_id"]
+        assert c.post("/decide", json=decide_body(token=session["token"])).status_code == 200
+        assert gateway.sent[0] == setup_message("gemini-3.8-live", "Kore", "Be Annie.")
+        assert headers == [{"x-goog-api-key": "test-gemini-key"}]
+        assert urls[0] == live_url(BASE.gemini_base_url)
+        gateway.inbox.put_nowait(json.dumps({"setupComplete": {}}))
+        assert ws.receive_json() == {"setupComplete": {}}
+        audio = {"realtimeInput": {"audio": {"mimeType": "audio/pcm;rate=16000", "data": "AAA="}}}
+        ws.send_json(audio)
+        for _ in range(50):
+            if len(gateway.sent) > 1:
+                break
+            time.sleep(0.01)
+        assert gateway.sent[-1] == audio
+        event = {"serverContent": {"inputTranscription": {"text": "Hello"}}}
+        gateway.inbox.put_nowait(json.dumps(event))
+        assert ws.receive_json() == event
+    assert c.get("/status").json()["active_sessions"] == 0
+
+
+def test_live_socket_rejects_invalid_setup_and_checks_availability(make_client):
+    gateway = FakeGeminiSocket()
+    c = make_client(gemini_connect=lambda *_: gateway)
+    with c.websocket_connect("/live", headers=ORIGIN) as ws:
+        ws.send_json({"type": "annie.setup", "model": "unsafe"})
+        assert ws.receive_json() == {"type": "annie.error", "error": "invalid_request"}
+    assert c.get("/status").json()["active_sessions"] == 0
+    no_key = make_client(gemini_api_key=None)
+    with pytest.raises(Exception):
+        with no_key.websocket_connect("/live", headers=ORIGIN):
+            pass
+    no_rate = make_client(voice_usd_per_second=None)
+    with pytest.raises(Exception):
+        with no_rate.websocket_connect("/live", headers=ORIGIN):
+            pass
+    with pytest.raises(Exception):
+        with c.websocket_connect("/live", headers={"Origin": "https://evil.example"}):
+            pass
+
+
+def test_live_socket_enforces_concurrent_session_limit(make_client):
+    gateway = FakeGeminiSocket()
+    c = make_client(max_sessions=1, gemini_connect=lambda *_: gateway)
+    with c.websocket_connect("/live", headers=ORIGIN) as active:
+        active.send_json({"type": "annie.setup", "instructions": ""})
+        assert active.receive_json()["type"] == "annie.session"
+        with c.websocket_connect("/live", headers=ORIGIN) as rejected:
+            assert rejected.receive_json() == {"type": "annie.error", "error": "at_capacity"}
 
 
 # -- dev token + CORS ----------------------------------------------------------

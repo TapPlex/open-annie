@@ -1,4 +1,62 @@
-# Upstream API facts (verified 2026-09-27)
+# Current voice provider: Gemini 3.8 Live via Cloudflare AI Gateway
+
+Source references:
+- https://ai.google.dev/api/live
+- https://ai.google.dev/gemini-api/docs/live-api/get-started-websocket
+- https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live
+- https://developers.cloudflare.com/ai-gateway/usage/websockets-api/realtime-api/
+
+The browser connects only to the broker at `WS /live`. The broker uses
+`GEMINI_BASE_URL` (default: `https://gateway.ai.cloudflare.com/v1/ac4054842a60a05296897e5f7042b4cd/winbestsai/compat`)
+and appends the Google Live WebSocket method path
+`/google-ai-studio/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`.
+It sends `x-goog-api-key` only on the broker-to-gateway connection. Neither the Gemini credential nor a
+Cloudflare credential is sent to the browser.
+
+The browser's first frame is a broker-only setup request:
+
+```json
+{"type":"annie.setup","instructions":"..."}
+```
+
+The broker validates its shape and length, then sends this provider setup upstream (model and voice are
+server configuration, not client-controlled):
+
+```json
+{
+  "setup": {
+    "model": "models/gemini-3.8-live",
+    "generationConfig": {
+      "responseModalities": ["AUDIO"],
+      "speechConfig": {"voiceConfig":{"prebuiltVoiceConfig":{"voiceName":"Kore"}}}
+    },
+    "inputAudioTranscription": {},
+    "outputAudioTranscription": {},
+    "systemInstruction": {"parts":[{"text":"..."}]}
+  }
+}
+```
+
+The browser sends mono PCM16LE audio as
+`{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":"<base64>"}}}`. Gemini audio output
+is decoded from `serverContent.modelTurn.parts[].inlineData` as PCM16LE at 24 kHz. The broker relays
+Gemini's JSON messages unchanged after the setup handshake. The client uses `serverContent.inputTranscription`,
+`outputTranscription`, `turnComplete`, and `interrupted` to update captions, turn state, and barge-in.
+Output audio transcription is enabled; no unsupported OpenAI voice names, data-channel labels or event
+types are used. The setup intentionally omits thinking configuration and affective/proactive-audio options.
+
+Gemini usage is token-based and there is no server-side usage/sideband feed in this implementation. The
+broker therefore estimates voice spend from elapsed session seconds and the operator-configured
+`ANNIE_VOICE_USD_PER_SECOND`; set it based on current model and audio-token pricing. Admission still reserves
+the configured session cap and enforces concurrency, per-IP and idle limits.
+
+The URL builder and setup are covered by mocks, but authenticated live traffic was not tested because no
+credential was securely injected for this session. Verify the path, account gateway configuration, voice
+name and pricing in deployment before enabling public access.
+
+---
+
+# Historical upstream API facts (GPT-Live, verified 2026-09-27; no longer used)
 
 Everything below was read from the live docs on **2026-09-27** (Markdown versions,
 fetched by appending `.md` to each docs URL) or measured from this machine that day.

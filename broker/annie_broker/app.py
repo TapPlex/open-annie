@@ -7,6 +7,8 @@ here and the fal App in fal_app.py share every line of logic.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import re
@@ -25,21 +27,13 @@ from . import tokens
 from .budget import Budget, Rejected
 from .config import VERSION, Settings
 from .decide import DecideClient, DecideInvalid, DecideUnavailable
-from .reaper import Reaper
 from .rosemate import Rosemate
-from .voice import VoiceClient, VoiceError
+from .voice import GeminiLiveClient, setup_message
 
 log = logging.getLogger("annie")
 
 MAX_BODY_BYTES = 64 * 1024
 WS_MAX_INFLIGHT = 4
-
-
-class SessionRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    sdp: str = Field(min_length=10, max_length=20_000)
-    voice: Optional[str] = Field(default=None, max_length=32, pattern=r"^[a-z0-9_-]+$")
-    instructions: Optional[str] = Field(default=None, max_length=16_000)
 
 
 class DecideRequest(BaseModel):
@@ -65,18 +59,16 @@ class Broker:
         self,
         settings: Optional[Settings] = None,
         *,
-        openai_transport: Optional[httpx.AsyncBaseTransport] = None,
+        gemini_connect: Optional[Callable] = None,
         typesafe_transport: Optional[httpx.AsyncBaseTransport] = None,
-        sideband_connect: Optional[Callable] = None,
         rosemate_transport: Optional[httpx.AsyncBaseTransport] = None,
         clock: Callable[[], float] = time.time,
     ):
         self.s = settings or Settings.from_env()
         self.clock = clock
         self.budget = Budget(self.s, clock)
-        self.voice = VoiceClient(self.s, openai_transport)
+        self.voice = GeminiLiveClient(self.s, gemini_connect)
         self.decider = DecideClient(self.s, typesafe_transport)
-        self.reaper = Reaper(self.s, self.budget, self.voice, sideband_connect, clock)
         self.rosemate = Rosemate(self.s, rosemate_transport, clock)
         self.origin_regex = origin_matcher(self.s.allowed_origins)
         self._origin_re = re.compile(self.origin_regex) if self.origin_regex else None
@@ -85,8 +77,6 @@ class Broker:
         self.decider.start_warm()
 
     async def aclose(self) -> None:
-        await self.reaper.aclose()
-        await self.voice.aclose()
         await self.decider.aclose()
         await self.rosemate.aclose()
 
@@ -123,41 +113,140 @@ class Broker:
         return 200, {"token": tokens.mint(self.s.hmac_secret, session_id, expires_at),
                      "expires_at": expires_at}
 
-    async def session(self, raw: bytes, ip: str, origin: Optional[str]) -> tuple[int, dict]:
-        if not self.origin_allowed(origin):
-            return 403, _err("origin_not_allowed")
-        if not self.voice.available:
-            return 503, _err("voice_unavailable")
-        try:
-            req = SessionRequest.model_validate_json(raw)
-        except ValidationError:
-            return 400, _err("invalid_request")
+    async def live_socket(self, ws: WebSocket) -> None:
+        if not self.origin_allowed(ws.headers.get("origin")) or not self.voice.available:
+            await ws.close(code=1008 if self.voice.available else 1013)
+            return
+        ip = self.client_ip(ws.headers, ws.client.host if ws.client else None)
         try:
             reservation = self.budget.admit(ip)
         except Rejected as rej:
-            return 429, _err(rej.code)
+            await ws.accept()
+            await ws.send_text(json.dumps({"type": "annie.error", "error": rej.code}))
+            await ws.close(code=1013)
+            return
 
-        safety_id = self.budget.ip_key(ip) if self.s.safety_identifier else None
+        session_id = f"gemini_{secrets.token_hex(12)}"
         try:
-            minted = await self.voice.create(req.sdp, req.voice, req.instructions, safety_id)
-        except VoiceError as exc:
-            self.budget.cancel(reservation)
-            return (503 if exc.code in ("voice_busy", "voice_no_credit") else 502), _err(exc.code)
-        except BaseException:
-            self.budget.cancel(reservation)
-            raise
+            async with self.voice.connect() as upstream:
+                await ws.accept()
+                try:
+                    raw = await asyncio.wait_for(ws.receive_text(), timeout=10)
+                    initial = json.loads(raw)
+                    if (
+                        not isinstance(initial, dict)
+                        or initial.get("type") != "annie.setup"
+                        or set(initial) - {"type", "instructions"}
+                        or not isinstance(initial.get("instructions", ""), str)
+                        or len(initial.get("instructions", "")) > 16_000
+                    ):
+                        raise ValueError("invalid setup")
+                except (TimeoutError, ValueError, TypeError, json.JSONDecodeError):
+                    self.budget.cancel(reservation)
+                    await ws.send_text(json.dumps({"type": "annie.error", "error": "invalid_request"}))
+                    await ws.close(code=1008)
+                    return
 
-        self.budget.open(reservation, minted.session_id)
-        self.reaper.watch(minted.session_id)
-        cap_deadline = int(self.clock()) + self.s.session_cap_s
-        expires_at = min(minted.expires_at, cap_deadline) if minted.expires_at else cap_deadline
-        token = tokens.mint(self.s.hmac_secret, minted.session_id, expires_at + self.s.token_grace_s)
-        return 200, {
-            "sdp": minted.sdp,
-            "session_id": minted.session_id,
-            "expires_at": expires_at,
-            "token": token,
-        }
+                rec = self.budget.open(reservation, session_id)
+                await upstream.send(json.dumps(setup_message(
+                    self.s.gemini_model, self.s.gemini_voice,
+                    initial.get("instructions") or self.s.default_instructions,
+                )))
+                expires_at = int(rec.deadline)
+                await ws.send_text(json.dumps({
+                    "type": "annie.session",
+                    "session_id": session_id,
+                    "token": tokens.mint(
+                        self.s.hmac_secret, session_id, expires_at + self.s.token_grace_s
+                    ),
+                    "expires_at": expires_at,
+                }))
+
+                async def to_upstream() -> None:
+                    while True:
+                        message = await ws.receive_text()
+                        if len(message) > 256 * 1024:
+                            raise ValueError("message too large")
+                        payload = json.loads(message)
+                        if not isinstance(payload, dict) or set(payload) != {"realtimeInput"}:
+                            raise ValueError("invalid live input")
+                        realtime = payload["realtimeInput"]
+                        audio = realtime.get("audio") if isinstance(realtime, dict) and set(realtime) == {"audio"} else None
+                        if (
+                            not isinstance(audio, dict)
+                            or set(audio) != {"mimeType", "data"}
+                            or audio.get("mimeType") != "audio/pcm;rate=16000"
+                            or not isinstance(audio.get("data"), str)
+                            or not audio["data"]
+                        ):
+                            raise ValueError("invalid live input")
+                        try:
+                            pcm = base64.b64decode(audio["data"], validate=True)
+                        except (binascii.Error, ValueError):
+                            raise ValueError("invalid live input") from None
+                        if not pcm or len(pcm) % 2:
+                            raise ValueError("invalid live input")
+                        await upstream.send(message)
+
+                async def to_browser() -> None:
+                    while True:
+                        message = await upstream.recv()
+                        if isinstance(message, bytes):
+                            message = message.decode("utf-8", "replace")
+                        event = json.loads(message)
+                        content = event.get("serverContent", {})
+                        if (
+                            content.get("inputTranscription")
+                            or content.get("outputTranscription")
+                            or content.get("modelTurn")
+                        ):
+                            self.budget.activity(session_id)
+                        await ws.send_text(message)
+
+                tasks = {
+                    asyncio.create_task(to_upstream()),
+                    asyncio.create_task(to_browser()),
+                }
+                reason = "connection_closed"
+                try:
+                    while True:
+                        done, _ = await asyncio.wait(
+                            tasks, timeout=1, return_when=asyncio.FIRST_COMPLETED
+                        )
+                        if done:
+                            break
+                        current = self.budget.sessions.get(session_id)
+                        if current is None:
+                            break
+                        if self.clock() >= current.deadline:
+                            reason = "session_cap"
+                            break
+                        if self.clock() - current.last_activity >= self.s.idle_timeout_s:
+                            reason = "idle_timeout"
+                            break
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                with suppress(Exception):
+                    await ws.send_text(json.dumps({
+                        "type": "annie.closed",
+                        "reason": reason,
+                        "usage_seconds": max(0, self.clock() - rec.started_at),
+                    }))
+                with suppress(Exception):
+                    await upstream.close()
+        except Exception as exc:
+            log.warning("gemini live connection failed: %s", type(exc).__name__)
+            if not getattr(ws, "client_state", None) or ws.client_state.name != "DISCONNECTED":
+                with suppress(Exception):
+                    await ws.close(code=1011)
+            if reservation and not reservation.done:
+                self.budget.cancel(reservation)
+        finally:
+            self.budget.close(session_id)
+            if not reservation.done:
+                self.budget.cancel(reservation)
 
     async def decide(self, payload: Any) -> tuple[int, dict]:
         try:
@@ -242,8 +331,8 @@ class Broker:
     # -- optional Rosemate integration (docs/rosemate.md) -------------------------
 
     async def rosemate_raw(self, route: str, raw: bytes, ip: str, origin: Optional[str]) -> tuple[int, dict]:
-        # The origin check is a browser guard only; every route but /session needs the
-        # scoped integration token, and /session needs the operator's access key.
+        # The origin check is a browser guard only; each route still requires its
+        # own server-side admission or scoped integration token.
         if not self.origin_allowed(origin):
             return 403, _err("origin_not_allowed")
         return await self.rosemate.handle(route, raw, ip)
@@ -300,13 +389,9 @@ def create_app(settings: Optional[Settings] = None, broker: Optional[Broker] = N
     async def dev_token() -> JSONResponse:
         return respond(broker.dev_token())
 
-    @app.post("/session")
-    async def session(request: Request) -> JSONResponse:
-        raw = await read_limited(request)
-        if raw is None:
-            return respond((413, _err("too_large")))
-        ip = broker.client_ip(request.headers, request.client.host if request.client else None)
-        return respond(await broker.session(raw, ip, request.headers.get("origin")))
+    @app.websocket("/live")
+    async def live(websocket: WebSocket) -> None:
+        await broker.live_socket(websocket)
 
     @app.post("/decide")
     async def decide(request: Request) -> JSONResponse:

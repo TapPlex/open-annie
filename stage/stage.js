@@ -189,7 +189,7 @@ function step(t, mode = "script") {
   if (mode === "script") hud.overlays(t, timeline.end);
 }
 
-// Live mode: real mic, GPT-Live via the broker, Jev with the session's token.
+// Live mode: real mic, Gemini Live via the broker, Jev with the session's token.
 let live = null;
 const LIVE = params.has("live") && params.get("broker");
 function liveCaptions() {
@@ -248,21 +248,22 @@ if (CAPTURE) {
   }
   if (LIVE) {
     btn.textContent = "🎙 Talk to Annie";
-    hud.setHonesty("live · voice: GPT-Live-1 over WebRTC · decisions: Jev via broker · lipsync, face and body computed in the browser");
+    hud.setHonesty("live · voice: Gemini 3.8 Live via Cloudflare AI Gateway · decisions: Jev via broker · lipsync, face and body computed in the browser");
     hud.setMode("live");
   }
   btn.onclick = async () => {
     btn.hidden = true;
     if (LIVE) {
-      const { GptLiveVoice } = await import("../packages/core/src/voice-gptlive.js");
+      const { GeminiLiveVoice } = await import("../packages/core/src/voice-gemini.js");
       const liveClock = { now: wall };
-      live = new GptLiveVoice({
-        bus, brokerUrl: params.get("broker"), clock: liveClock, voice: "willow",
+      live = new GeminiLiveVoice({
+        bus, brokerUrl: params.get("broker"), clock: liveClock,
         instructions: await fetch(new URL("persona/character.md", ROOT)).then((r) => r.text()),
       });
       try {
         await live.connect();
       } catch (e) {
+        live.close();
         btn.hidden = false;
         btn.textContent = `Voice unavailable (${e.message}) · retry`;
         return;
@@ -271,6 +272,7 @@ if (CAPTURE) {
       annie.decider = new BrokerDecider({ url: params.get("broker"), getToken: () => live.token });
       liveCaptions();
       mode = "live";
+      addEventListener("pagehide", () => live?.close(), { once: true });
       return;
     }
     rosemate?.suspend();

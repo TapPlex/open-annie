@@ -2,7 +2,8 @@
 
 Deploy (from the repo root, with fal >= 1.79 installed and `fal auth login` done):
 
-    fal secrets set ANNIE_OPENAI_API_KEY=sk-... ANNIE_TYPESAFE_API_KEY=... \\
+    fal secrets set ANNIE_GEMINI_API_KEY="$GEMINI_API_KEY" ANNIE_TYPESAFE_API_KEY="$TYPESAFE_API_KEY" \\
+        ANNIE_GEMINI_BASE_URL=https://gateway.ai.cloudflare.com/v1/ac4054842a60a05296897e5f7042b4cd/winbestsai/compat \\
         ANNIE_HMAC_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(32))")
     fal secrets set ANNIE_ALLOWED_ORIGINS=https://your-stage.example.com
     fal deploy broker/fal_app.py::AnnieBroker --app-name annie-broker --auth public
@@ -56,7 +57,9 @@ class AnnieBroker(fal.App, name="annie-broker", keep_alive=300):
     max_multiplexing = 32  # WS /decide holds a slot for a whole voice session
     request_timeout = 300  # longer than ANNIE_SESSION_CAP_S so WS /decide outlives a session
     secrets = [
-        "ANNIE_OPENAI_API_KEY", "ANNIE_TYPESAFE_API_KEY", "ANNIE_HMAC_SECRET", "ANNIE_ALLOWED_ORIGINS",
+        "ANNIE_GEMINI_API_KEY", "ANNIE_GEMINI_BASE_URL", "ANNIE_GEMINI_MODEL",
+        "ANNIE_GEMINI_VOICE", "ANNIE_VOICE_USD_PER_SECOND",
+        "ANNIE_TYPESAFE_API_KEY", "ANNIE_HMAC_SECRET", "ANNIE_ALLOWED_ORIGINS",
         # Optional Rosemate integration (docs/rosemate.md); unset = off.
         "ANNIE_ROSEMATE_MCP_URL", "ANNIE_ROSEMATE_MCP_TOKEN", "ANNIE_ROSEMATE_ACCESS_KEY",
         "ANNIE_ROSEMATE_TOY_ACTIONS",
@@ -67,7 +70,7 @@ class AnnieBroker(fal.App, name="annie-broker", keep_alive=300):
         # The fal gateway sits in front of the runner; the caller's address arrives
         # in X-Forwarded-For (leftmost entry). Verify after first deploy.
         os.environ.setdefault("ANNIE_IP_HEADER", "x-forwarded-for")
-        os.environ["ANNIE_DEV"] = "0"  # /dev-token would bypass /session admission control
+        os.environ["ANNIE_DEV"] = "0"  # /dev-token must not bypass live session admission control
         self.broker = Broker()
         await self.broker.start()
 
@@ -86,15 +89,6 @@ class AnnieBroker(fal.App, name="annie-broker", keep_alive=300):
         async def status() -> dict:
             return self.broker.status()
 
-    @fal.endpoint("/session")
-    async def session(self, request: Request) -> JSONResponse:
-        raw = await read_limited(request)
-        if raw is None:
-            return JSONResponse({"error": "too_large"}, status_code=413)
-        ip = self.broker.client_ip(request.headers, request.client.host if request.client else None)
-        status, body = await self.broker.session(raw, ip, request.headers.get("origin"))
-        return JSONResponse(body, status_code=status)
-
     @fal.endpoint("/decide")
     async def decide(self, request: Request) -> JSONResponse:
         raw = await read_limited(request)
@@ -106,6 +100,10 @@ class AnnieBroker(fal.App, name="annie-broker", keep_alive=300):
     @fal.endpoint("/decide", is_websocket=True)
     async def decide_ws(self, websocket: WebSocket) -> None:
         await self.broker.decide_socket(websocket)
+
+    @fal.endpoint("/live", is_websocket=True)
+    async def live_ws(self, websocket: WebSocket) -> None:
+        await self.broker.live_socket(websocket)
 
     async def _rosemate(self, route: str, request: Request) -> JSONResponse:
         raw = await read_limited(request)

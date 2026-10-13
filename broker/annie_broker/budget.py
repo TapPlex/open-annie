@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable
 
-from .config import JEV_USD_PER_INPUT_TOKEN, VOICE_INIT_SECONDS, VOICE_USD_PER_SECOND, Settings
+from .config import JEV_USD_PER_INPUT_TOKEN, Settings
 
 
 class Rejected(Exception):
@@ -63,12 +63,14 @@ class Budget:
 
     def _billed_seconds(self, rec: SessionRecord, now: float) -> float:
         seconds = rec.usage_seconds if rec.usage_seconds is not None else now - rec.started_at
-        return max(float(VOICE_INIT_SECONDS), seconds)
+        return max(0.0, seconds)
 
     # -- admission ---------------------------------------------------------
 
     def admit(self, ip: str) -> Reservation:
         self._roll()
+        if self.s.voice_usd_per_second is None or self.s.voice_usd_per_second <= 0:
+            raise Rejected("voice_cost_unconfigured")
         key = self.ip_key(ip)
         if self.s.per_ip_daily and self._ip_counts.get(key, 0) >= self.s.per_ip_daily:
             raise Rejected("ip_limit")
@@ -81,7 +83,7 @@ class Budget:
         committed = self._closed_seconds + cap * self._pending + sum(
             max(cap, self._billed_seconds(r, now)) for r in self.sessions.values()
         )
-        if (committed + cap) * VOICE_USD_PER_SECOND + self._jev_usd > self.s.daily_budget_usd:
+        if (committed + cap) * self.s.voice_usd_per_second + self._jev_usd > self.s.daily_budget_usd:
             raise Rejected("budget_exhausted")
         self._pending += 1
         self._ip_counts[key] = self._ip_counts.get(key, 0) + 1
@@ -133,7 +135,7 @@ class Budget:
         return self._closed_seconds + sum(self._billed_seconds(r, now) for r in self.sessions.values())
 
     def spent_today(self) -> float:
-        return self.voice_seconds_today() * VOICE_USD_PER_SECOND + self._jev_usd
+        return self.voice_seconds_today() * (self.s.voice_usd_per_second or 0.0) + self._jev_usd
 
     def exhausted(self) -> bool:
         return self.spent_today() >= self.s.daily_budget_usd

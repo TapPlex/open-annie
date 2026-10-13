@@ -26,7 +26,7 @@ export async function startRosemate({ bus, character, brokerUrl, now, getMode, i
     handlers: {
       talk: (a) => {
         if (getMode() === "script") return { ok: false, error: "busy_script" };
-        if (isLive()) return { ok: false, error: "live_voice_active" }; // the open mic would hear it; GPT-Live owns the voice
+        if (isLive()) return { ok: false, error: "live_voice_active" }; // the open mic would hear it; Gemini Live owns the voice
         return speech.speak(a.message);
       },
       emotion: (a) => {

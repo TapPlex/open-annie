@@ -60,10 +60,8 @@
       </marker>
     </defs>
     <g fill="none" stroke="var(--line)" stroke-width="1.6" stroke-linecap="round">
-      <!-- browser <-> GPT-Live: the voice path -->
-      <path d="M330 166 V 290" marker-start="url(#tip)" marker-end="url(#tip)" stroke="var(--react)" stroke-width="2"/>
-      <!-- broker -> GPT-Live: session minted with the server key -->
-      <path d="M700 290 V 166" marker-end="url(#tip)" stroke-dasharray="4 5"/>
+      <!-- broker <-> Gemini Live via Cloudflare AI Gateway -->
+      <path d="M700 290 V 166" marker-start="url(#tip)" marker-end="url(#tip)" stroke="var(--react)" stroke-width="2"/>
       <!-- browser <-> broker -->
       <path d="M428 398 H 552" marker-end="url(#tip)"/>
       <path d="M552 452 H 428" marker-end="url(#tip)"/>
@@ -77,8 +75,8 @@
     <div class="head"><span class="dot" style="width: 22px; height: 22px"></span><h2 style="font-size: 26px; letter-spacing: -0.04em">open-annie</h2></div>
     <div class="sub" style="margin: 6px 0 0 33px">how it works</div>
   </div>
-  <div class="label" style="right: 962px; top: 196px; text-align: right">WebRTC audio + transcripts<br><span>voice never touches the broker</span></div>
-  <div class="label" style="left: 714px; top: 196px">mints the session<br><span>server key, SDP exchange</span></div>
+  <div class="label" style="right: 962px; top: 196px; text-align: right">audio + transcripts<br><span>relayed by the broker</span></div>
+  <div class="label" style="left: 714px; top: 196px">Live WebSocket relay<br><span>Gemini key stays server-side</span></div>
   <div class="label" style="left: 428px; width: 124px; top: 374px; text-align: center">transcript</div>
   <div class="label" style="left: 428px; width: 124px; top: 460px; text-align: center">decisions</div>
   <div class="label" style="left: 848px; width: 104px; top: 374px; text-align: center">questions</div>
@@ -88,11 +86,11 @@
     <div class="head">
       <div class="orb"><span><i style="height:9px"></i><i style="height:17px"></i><i style="height:24px"></i><i style="height:14px"></i><i style="height:20px"></i><i style="height:8px"></i></span></div>
       <div>
-        <h2>GPT-Live-1 <span style="font-weight:400;color:var(--muted)">talks</span></h2>
-        <div class="sub">OpenAI's full-duplex speech model: listens, answers, takes barge-in</div>
+        <h2>Gemini 3.8 Live <span style="font-weight:400;color:var(--muted)">talks</span></h2>
+        <div class="sub">Realtime speech through Cloudflare AI Gateway</div>
       </div>
     </div>
-    <div class="row" style="margin: 14px 0 0 57px"><span class="chip plain"><i></i>voice <span class="meta">willow</span></span><span class="chip plain"><i></i>WebRTC <span class="meta">straight to the browser</span></span></div>
+    <div class="row" style="margin: 14px 0 0 57px"><span class="chip plain"><i></i>voice <span class="meta">Kore</span></span><span class="chip plain"><i></i>WebSocket <span class="meta">via broker</span></span></div>
   </div>
 
   <div class="card soft" style="left: 960px; top: 40px; width: 280px; height: 178px">
@@ -108,6 +106,7 @@
     <div class="sub mono" style="margin-left: 27px">localhost:8080/stage/</div>
     <ul>
       <li>three.js + three-vrm render Annie</li>
+      <li>mic audio relayed through broker</li>
       <li>lipsync from her own audio (HeadAudio)</li>
       <li>hand-animated motion, collision guard, cloth</li>
       <li>Instinct asks Jev and gates every answer</li>
@@ -120,7 +119,7 @@
   <div class="card" style="left: 552px; top: 290px; width: 296px; height: 252px">
     <div class="head"><h2>Broker <span style="font-weight:400;color:var(--muted)">on fal</span></h2></div>
     <div class="sub">fal serverless, one warm CPU runner</div>
-    <div class="route">/session <span>SDP exchange</span><br>/decide&nbsp; <span>Jev, breaker, budget</span></div>
+    <div class="route">/live&nbsp;&nbsp;&nbsp; <span>Gemini audio relay</span><br>/decide&nbsp; <span>Jev, breaker, budget</span></div>
     <div class="note">API keys never leave it. Signed session tokens, rate limits, a daily budget. No transcripts kept.</div>
   </div>
 
